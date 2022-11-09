@@ -108,7 +108,7 @@ struct PyMethodDef pypy_issues_methods[] = {
 
 // ----------------------------------------------------
 // Part #4: Reproducer of extended type object issue
-// https://foss.heptapod.net/pypy/pypy/-/issues/3844
+// https://foss.heptapod.net/pypy/pypy/-/issues/3847
 // ----------------------------------------------------
 
 typedef struct {
