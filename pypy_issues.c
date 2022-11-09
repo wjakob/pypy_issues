@@ -134,7 +134,7 @@ static PyType_Spec metaclass_spec = {
     .name = "pypy_issues.metaclass",
     .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .slots = metaclass_slots,
-    .itemsize = (int) sizeof(ExtendedType)
+    .basicsize = (int) sizeof(ExtendedType)
 };
 
 // ----------------------------------------------------
@@ -170,8 +170,9 @@ PyInit_pypy_issues(void)
         return NULL;
     }
 
+    metaclass_spec.itemsize = PyType_Type.tp_itemsize;
+
     PyObject *metaclass = PyType_FromSpec(&metaclass_spec);
-    metaclass_spec.basicsize = PyType_Type.tp_basicsize;
 
     if (!metaclass || PyModule_AddObject(m, "metaclass", metaclass) < 0) {
         Py_XDECREF(metaclass);
