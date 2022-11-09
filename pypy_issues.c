@@ -33,13 +33,13 @@ static PyType_Spec heap_type_spec = {
     .name = "pypy_issues.heap_type",
     .flags = Py_TPFLAGS_DEFAULT|Py_TPFLAGS_HEAPTYPE,
     .slots = heap_type_slots,
-    .basicsize = sizeof(PyObject),
+    .basicsize = (int) sizeof(PyObject),
     .itemsize = 0
 };
 
 // ----------------------------------------------------
 // Part 2: Reproducer of vector call issue #1
-// https://foss.heptapod.net/pypy/pypy/-/issues/3844
+// https://foss.heptapod.net/pypy/pypy/-/issues/3845
 // ----------------------------------------------------
 
 typedef struct {
@@ -74,12 +74,14 @@ static PyType_Slot callable_slots[] = {
 static PyType_Spec callable_spec = {
     .name = "pypy_issues.callable",
     .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_VECTORCALL,
-    .slots = callable_slots
+    .slots = callable_slots,
+    .basicsize = (int) sizeof(callable),
+    .itemsize = 0
 };
 
 // ----------------------------------------------------
-// Part #3 Reproducer of vector call issue #2
-// https://foss.heptapod.net/pypy/pypy/-/issues/3844
+// Part #3: Reproducer of vector call issue #2
+// https://foss.heptapod.net/pypy/pypy/-/issues/3845
 // ----------------------------------------------------
 
 static PyObject* call(PyObject* self, PyObject* arg) {
@@ -104,6 +106,36 @@ struct PyMethodDef pypy_issues_methods[] = {
     { NULL, NULL, 0, NULL},
 };
 
+// ----------------------------------------------------
+// Part #4: Reproducer of extended type object issue
+// https://foss.heptapod.net/pypy/pypy/-/issues/3844
+// ----------------------------------------------------
+
+typedef struct {
+    PyHeapTypeObject ht;
+    uint8_t extra[2048];
+} ExtendedType;
+
+int metaclass_init(PyObject *self, PyObject *args, PyObject *kwds) {
+    int rv = PyType_Type.tp_init(self, args, kwds);
+    printf("Got to metaclass_init.\n");
+    if (rv == 0)
+        memset(((ExtendedType *) self)->extra, 0, 2048);
+    return rv;
+}
+
+static PyType_Slot metaclass_slots[] = {
+    { Py_tp_init, (void *) metaclass_init },
+    { Py_tp_base, (void *) &PyType_Type },
+    { 0, NULL }
+};
+
+static PyType_Spec metaclass_spec = {
+    .name = "pypy_issues.metaclass",
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .slots = metaclass_slots,
+    .itemsize = (int) sizeof(ExtendedType)
+};
 
 // ----------------------------------------------------
 
@@ -124,16 +156,25 @@ PyInit_pypy_issues(void)
 
     PyObject *heap_type = PyType_FromSpec(&heap_type_spec);
 
-    if (PyModule_AddObject(m, "heap_type", heap_type) < 0) {
-        Py_DECREF(heap_type);
+    if (!heap_type || PyModule_AddObject(m, "heap_type", heap_type) < 0) {
+        Py_XDECREF(heap_type);
         Py_DECREF(m);
         return NULL;
     }
 
     PyObject *callable = PyType_FromSpec(&callable_spec);
 
-    if (PyModule_AddObject(m, "callable", callable) < 0) {
-        Py_DECREF(callable);
+    if (!callable || PyModule_AddObject(m, "callable", callable) < 0) {
+        Py_XDECREF(callable);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    PyObject *metaclass = PyType_FromSpec(&metaclass_spec);
+    metaclass_spec.basicsize = PyType_Type.tp_basicsize;
+
+    if (!metaclass || PyModule_AddObject(m, "metaclass", metaclass) < 0) {
+        Py_XDECREF(metaclass);
         Py_DECREF(m);
         return NULL;
     }
