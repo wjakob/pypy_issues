@@ -1,141 +1,139 @@
 #include <Python.h>
 #include <structmember.h>
 
-// ----------------------------------------------------
-// Part 1: Reproducer of reference counting issue
-// https://foss.heptapod.net/pypy/pypy/-/issues/3844
-// ----------------------------------------------------
-
-PyObject *heap_type_new(PyTypeObject *tp, PyObject *args,
-                        PyObject *kwds) {
-
-    PyObject *obj = PyObject_Malloc(sizeof(PyObject));
-    memset(obj, 0, sizeof(PyObject));
-    return PyObject_Init(obj, tp);
-}
-
-void heap_type_dealloc(PyObject *self) {
-    PyTypeObject *tp = Py_TYPE(self);
-    tp->tp_free(self);
-
-#if PY_VERSION_HEX > 0x03080000
-    Py_DECREF(tp);
-#endif
-}
-
-static PyType_Slot heap_type_slots[] = {
-    { Py_tp_new, heap_type_new },
-    { Py_tp_dealloc, heap_type_dealloc },
-    { 0, NULL }
-};
-
-static PyType_Spec heap_type_spec = {
-    .name = "pypy_issues.heap_type",
-    .flags = Py_TPFLAGS_DEFAULT|Py_TPFLAGS_HEAPTYPE,
-    .slots = heap_type_slots,
-    .basicsize = (int) sizeof(PyObject),
-    .itemsize = 0
-};
+#define USE_VECTORCALL_METHOD 0 // Set to 1 to reproduce part #3
 
 // ----------------------------------------------------
-// Part 2: Reproducer of vector call issue #1
-// https://foss.heptapod.net/pypy/pypy/-/issues/3845
+// Part #1: Reproducer of cyclic GC issue
 // ----------------------------------------------------
 
 typedef struct {
     PyObject_HEAD
-    PyObject* (*vectorcall)(PyObject *, PyObject * const*, size_t, PyObject *);
-} callable;
+    PyObject *nested;
+} wrapper;
 
-PyObject* my_vectorcall(PyObject *self, PyObject * const* args, size_t nargs,
-                        PyObject *kwnames) {
-    return PyLong_FromLong(1234);
-}
-
-static struct PyMemberDef callable_members[] = {
-    // Supported starting with Python 3.9
-    { "__vectorcalloffset__", T_PYSSIZET,
-      (Py_ssize_t) offsetof(callable, vectorcall), READONLY, NULL },
-     { NULL, 0, 0, 0, NULL }
- };
-
-int callable_init(PyObject *self, PyObject *args, PyObject *kwds) {
-    ((callable *) self)->vectorcall = my_vectorcall;
+static int wrapper_init(PyObject *self, PyObject *args, PyObject *kwds) {
+    printf("wrapper tp_init called.\n");
     return 0;
 }
 
-static PyType_Slot callable_slots[] = {
-    { Py_tp_init, (void *) callable_init },
-    { Py_tp_members, (void *) callable_members },
-    { Py_tp_call, (void *) PyVectorcall_Call },
+static void wrapper_dealloc(PyObject *self) {
+    printf("wrapper tp_dealloc called.\n");
+    PyObject_GC_UnTrack(self);
+    PyTypeObject *tp = Py_TYPE(self);
+    Py_CLEAR(((wrapper *) self)->nested);
+    tp->tp_free(self);
+    Py_DECREF(tp);
+}
+
+static int wrapper_traverse(PyObject *self, visitproc visit, void *arg) {
+    printf("wrapper tp_traverse called.\n");
+    Py_VISIT(((wrapper *) self)->nested);
+    return 0;
+}
+
+static int wrapper_clear(PyObject *self) {
+    printf("wrapper tp_clear called.\n");
+    Py_CLEAR(((wrapper *) self)->nested);
+    return 0;
+}
+
+static PyMemberDef wrapper_members[] = {
+    { "nested", T_OBJECT, offsetof(wrapper, nested), 0, NULL },
+    { NULL , 0, 0, 0, NULL }
+};
+
+static PyType_Slot wrapper_slots[] = {
+    { Py_tp_init, wrapper_init },
+    { Py_tp_dealloc, wrapper_dealloc },
+    { Py_tp_traverse, wrapper_traverse },
+    { Py_tp_clear, wrapper_clear },
+    { Py_tp_members, wrapper_members },
     { 0, NULL }
 };
 
-static PyType_Spec callable_spec = {
-    .name = "pypy_issues.callable",
-    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_VECTORCALL,
-    .slots = callable_slots,
-    .basicsize = (int) sizeof(callable),
+static PyType_Spec wrapper_spec = {
+    .name = "pypy_issues.wrapper",
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .slots = wrapper_slots,
+    .basicsize = (int) sizeof(wrapper),
     .itemsize = 0
 };
 
 // ----------------------------------------------------
-// Part #3: Reproducer of vector call issue #2
-// https://foss.heptapod.net/pypy/pypy/-/issues/3845
+// Part #2: Reproducer of name inconsistencies
 // ----------------------------------------------------
 
-static PyObject* call(PyObject* self, PyObject* arg) {
+static int func_init(PyObject *self, PyObject *args, PyObject *kwds) {
+    return 0;
+}
+
+static PyObject *func_get_name(PyObject *self, void* unused) {
+    return PyUnicode_FromString("my_name");
+}
+
+static PyObject *func_get_qualname(PyObject *self, void* unused) {
+    return PyUnicode_FromString("my_qualname");
+}
+
+static PyObject *func_get_module(PyObject *self, void* unused) {
+    return PyUnicode_FromString("my_module");
+}
+
+static PyGetSetDef func_getset[] = {
+    { "__name__", func_get_name, NULL, NULL, NULL },
+    { "__qualname__", func_get_qualname, NULL, NULL, NULL },
+    { "__module__", func_get_module, NULL, NULL, NULL },
+    { NULL, NULL, NULL, NULL, NULL }
+};
+
+static PyType_Slot func_slots[] = {
+    { Py_tp_init, func_init },
+    { Py_tp_getset, func_getset },
+    { 0, NULL }
+};
+
+static PyType_Spec func_spec = {
+    .name = "pypy_issues.func",
+    .flags = Py_TPFLAGS_DEFAULT,
+    .slots = func_slots,
+    .basicsize = (int) sizeof(PyObject),
+    .itemsize = 0
+};
+
+#if USE_VECTORCALL_METHOD == 1
+// ----------------------------------------------------
+// Part #3: Reproducer of method vector call issue
+// ----------------------------------------------------
+
+static PyObject* method_call(PyObject* self, PyObject* arg) {
     PyObject *value = PyLong_FromLong(1234);
     if (!value)
         return NULL;
 
-    PyObject *args[2] = { NULL, value };
-    size_t nargsf = 1 | PY_VECTORCALL_ARGUMENTS_OFFSET;
+    PyObject *name = PyUnicode_FromString("my_method");
+    if (!name) {
+        Py_DECREF(value);
+        return NULL;
+    }
 
-    PyObject *result = PyObject_Vectorcall(
-        arg, args + 1, nargsf, NULL
-    );
+    PyObject *args[2] = { arg, value };
+    size_t nargsf = 2 | PY_VECTORCALL_ARGUMENTS_OFFSET;
+
+    PyObject *result = PyObject_VectorcallMethod(
+        name, args, nargsf, NULL);
 
     Py_DECREF(value);
+    Py_DECREF(name);
 
     return result;
 }
 
 struct PyMethodDef pypy_issues_methods[] = {
-    { "call", (PyCFunction) call, METH_O, NULL },
+    { "method_call", (PyCFunction) method_call, METH_O, NULL },
     { NULL, NULL, 0, NULL},
 };
-
-// ----------------------------------------------------
-// Part #4: Reproducer of extended type object issue
-// https://foss.heptapod.net/pypy/pypy/-/issues/3847
-// ----------------------------------------------------
-
-typedef struct {
-    PyHeapTypeObject ht;
-    uint8_t extra[2048];
-} ExtendedType;
-
-int metaclass_init(PyObject *self, PyObject *args, PyObject *kwds) {
-    int rv = PyType_Type.tp_init(self, args, kwds);
-    printf("Got to metaclass_init.\n");
-    if (rv == 0)
-        memset(((ExtendedType *) self)->extra, 0, 2048);
-    return rv;
-}
-
-static PyType_Slot metaclass_slots[] = {
-    { Py_tp_init, (void *) metaclass_init },
-    { Py_tp_base, (void *) &PyType_Type },
-    { 0, NULL }
-};
-
-static PyType_Spec metaclass_spec = {
-    .name = "pypy_issues.metaclass",
-    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    .slots = metaclass_slots,
-    .basicsize = (int) sizeof(ExtendedType)
-};
+#endif
 
 // ----------------------------------------------------
 
@@ -144,7 +142,9 @@ static PyModuleDef pypy_issues_module = {
     .m_name = "pypy_issues",
     .m_doc = "Reproducer for miscellaneous PyPy issues",
     .m_size = -1,
+#if USE_VECTORCALL_METHOD == 1
     .m_methods = pypy_issues_methods
+#endif
 };
 
 PyMODINIT_FUNC
@@ -154,28 +154,18 @@ PyInit_pypy_issues(void)
     if (m == NULL)
         return NULL;
 
-    PyObject *heap_type = PyType_FromSpec(&heap_type_spec);
+    PyObject *wrapper = PyType_FromSpec(&wrapper_spec);
 
-    if (!heap_type || PyModule_AddObject(m, "heap_type", heap_type) < 0) {
-        Py_XDECREF(heap_type);
+    if (!wrapper || PyModule_AddObject(m, "wrapper", wrapper) < 0) {
+        Py_XDECREF(wrapper);
         Py_DECREF(m);
         return NULL;
     }
 
-    PyObject *callable = PyType_FromSpec(&callable_spec);
+    PyObject *func = PyType_FromSpec(&func_spec);
 
-    if (!callable || PyModule_AddObject(m, "callable", callable) < 0) {
-        Py_XDECREF(callable);
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    metaclass_spec.itemsize = PyType_Type.tp_itemsize;
-
-    PyObject *metaclass = PyType_FromSpec(&metaclass_spec);
-
-    if (!metaclass || PyModule_AddObject(m, "metaclass", metaclass) < 0) {
-        Py_XDECREF(metaclass);
+    if (!func || PyModule_AddObject(m, "func", func) < 0) {
+        Py_XDECREF(func);
         Py_DECREF(m);
         return NULL;
     }
