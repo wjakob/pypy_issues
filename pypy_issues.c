@@ -80,6 +80,20 @@ static PyObject *func_get_module(PyObject *self, void* unused) {
     return PyUnicode_FromString("my_module");
 }
 
+#if PY_VERSION_HEX < 0x03090000
+// PyGetSetDef entry for __module__ is ignored in Python 3.8
+PyObject *func_getattro(PyObject *self, PyObject *name_) {
+    const char *name = PyUnicode_AsUTF8AndSize(name_, NULL);
+
+    if (!name)
+        return NULL;
+    else if (strcmp(name, "__module__") == 0)
+        return func_get_module(self, NULL);
+    else
+        return PyObject_GenericGetAttr(self, name_);
+}
+#endif
+
 static PyGetSetDef func_getset[] = {
     { "__name__", func_get_name, NULL, NULL, NULL },
     { "__qualname__", func_get_qualname, NULL, NULL, NULL },
@@ -90,6 +104,9 @@ static PyGetSetDef func_getset[] = {
 static PyType_Slot func_slots[] = {
     { Py_tp_init, func_init },
     { Py_tp_getset, func_getset },
+#if PY_VERSION_HEX < 0x03090000
+    { Py_tp_getattro, (void *) func_getattro },
+#endif
     { 0, NULL }
 };
 
