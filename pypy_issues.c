@@ -120,6 +120,34 @@ struct PyMethodDef pypy_issues_methods[] = {
 
 // ----------------------------------------------------
 
+static int dummy_init(PyObject *self, PyObject *args, PyObject *kwds) {
+    printf("dummy tp_init called.\n");
+    return 0;
+}
+
+static void dummy_dealloc(PyObject *self) {
+    printf("dummy tp_dealloc called.\n");
+    PyTypeObject *tp = Py_TYPE(self);
+    tp->tp_free(self);
+    Py_DECREF(tp);
+}
+
+static PyType_Slot dummy_slots[] = {
+    { Py_tp_init, dummy_init },
+    { Py_tp_dealloc, dummy_dealloc },
+    { 0, NULL }
+};
+
+static PyType_Spec dummy_spec = {
+    .name = "pypy_issues.dummy",
+    .flags = Py_TPFLAGS_DEFAULT,
+    .slots = dummy_slots,
+    .basicsize = (int) sizeof(PyObject),
+    .itemsize = 0
+};
+
+// ----------------------------------------------------
+
 static PyModuleDef pypy_issues_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "pypy_issues",
@@ -147,6 +175,21 @@ PyInit_pypy_issues(void)
 
     if (!func || PyModule_AddObject(m, "callable", func) < 0) {
         Py_XDECREF(func);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    PyObject *dummy = PyType_FromSpec(&dummy_spec);
+
+    if (!dummy || PyModule_AddObject(m, "dummy", dummy) < 0) {
+        Py_XDECREF(dummy);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    PyObject *dummy_instance = PyObject_CallFunctionObjArgs(dummy, NULL);
+    if (!dummy_instance || PyModule_AddObject(m, "dummy_instance", dummy_instance) < 0) {
+        Py_XDECREF(dummy_instance);
         Py_DECREF(m);
         return NULL;
     }
