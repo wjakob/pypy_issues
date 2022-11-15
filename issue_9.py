@@ -12,7 +12,7 @@ def f():
 
     del w
 
-    # GC 3 times in callabletion scope for good measure!
+    # GC 3 times in function scope for good measure!
     gc.collect()
     gc.collect()
     gc.collect()
