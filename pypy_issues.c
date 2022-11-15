@@ -1,8 +1,6 @@
 #include <Python.h>
 #include <structmember.h>
 
-#define USE_VECTORCALL_METHOD 1 // Set to 1 to reproduce part #3
-
 // ----------------------------------------------------
 // Part #1: Reproducer of cyclic GC issue
 // ----------------------------------------------------
@@ -118,7 +116,6 @@ static PyType_Spec func_spec = {
     .itemsize = 0
 };
 
-#if USE_VECTORCALL_METHOD == 1
 // ----------------------------------------------------
 // Part #3: Reproducer of method vector call issue
 // ----------------------------------------------------
@@ -190,12 +187,25 @@ leave:
     return result;
 }
 
+// ----------------------------------------------------
+
+static PyObject* get_name(PyObject* self, PyObject* arg) {
+    if (PyType_CheckExact(arg)) {
+        return PyUnicode_FromString(((PyTypeObject *) arg)->tp_name);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "expected a type object");
+        return NULL;
+    }
+}
+
+// ----------------------------------------------------
+
 struct PyMethodDef pypy_issues_methods[] = {
     { "method_call", (PyCFunction) method_call, METH_O, NULL },
     { "method_call_kw", (PyCFunction) method_call_kw, METH_O, NULL },
+    { "get_name", (PyCFunction) get_name, METH_O, NULL },
     { NULL, NULL, 0, NULL},
 };
-#endif
 
 // ----------------------------------------------------
 
@@ -204,9 +214,7 @@ static PyModuleDef pypy_issues_module = {
     .m_name = "pypy_issues",
     .m_doc = "Reproducer for miscellaneous PyPy issues",
     .m_size = -1,
-#if USE_VECTORCALL_METHOD == 1
     .m_methods = pypy_issues_methods
-#endif
 };
 
 PyMODINIT_FUNC
