@@ -59,133 +59,46 @@ static PyType_Spec wrapper_spec = {
 };
 
 // ----------------------------------------------------
-// Part #2: Reproducer of name inconsistencies
-// ----------------------------------------------------
 
-static int func_init(PyObject *self, PyObject *args, PyObject *kwds) {
+typedef struct {
+    PyObject_HEAD
+    PyObject* (*vectorcall)(PyObject *, PyObject * const*, size_t, PyObject *);
+} callable;
+
+
+PyObject* my_vectorcall(PyObject *self, PyObject * const* args, size_t nargs,
+                        PyObject *kwnames) {
+    PyErr_SetString(PyExc_TypeError, "oops, an exception!");
+    return NULL;
+}
+
+static int callable_init(PyObject *self, PyObject *args, PyObject *kwds) {
+    ((callable *) self)->vectorcall = my_vectorcall;
     return 0;
 }
 
-static PyObject *func_get_name(PyObject *self, void* unused) {
-    return PyUnicode_FromString("my_name");
-}
-
-static PyObject *func_get_qualname(PyObject *self, void* unused) {
-    return PyUnicode_FromString("my_qualname");
-}
-
-static PyObject *func_get_module(PyObject *self, void* unused) {
-    return PyUnicode_FromString("my_module");
-}
-
-#if PY_VERSION_HEX < 0x03090000
-// PyGetSetDef entry for __module__ is ignored in Python 3.8
-PyObject *func_getattro(PyObject *self, PyObject *name_) {
-    const char *name = PyUnicode_AsUTF8AndSize(name_, NULL);
-
-    if (!name)
-        return NULL;
-    else if (strcmp(name, "__module__") == 0)
-        return func_get_module(self, NULL);
-    else
-        return PyObject_GenericGetAttr(self, name_);
-}
-#endif
-
-static PyGetSetDef func_getset[] = {
-    { "__name__", func_get_name, NULL, NULL, NULL },
-    { "__qualname__", func_get_qualname, NULL, NULL, NULL },
-    { "__module__", func_get_module, NULL, NULL, NULL },
-    { NULL, NULL, NULL, NULL, NULL }
+static struct PyMemberDef callable_members[] = {
+    // Supported starting with Python 3.9
+    { "__vectorcalloffset__", T_PYSSIZET,
+      (Py_ssize_t) offsetof(callable, vectorcall), READONLY, NULL },
+     { NULL, 0, 0, 0, NULL }
 };
 
-static PyType_Slot func_slots[] = {
-    { Py_tp_init, func_init },
-    { Py_tp_getset, func_getset },
-#if PY_VERSION_HEX < 0x03090000
-    { Py_tp_getattro, (void *) func_getattro },
-#endif
+static PyType_Slot callable_slots[] = {
+    { Py_tp_init, callable_init },
+    { Py_tp_members, callable_members },
+    { Py_tp_call, (void *) PyVectorcall_Call },
     { 0, NULL }
 };
 
-static PyType_Spec func_spec = {
-    .name = "pypy_issues.func",
-    .flags = Py_TPFLAGS_DEFAULT,
-    .slots = func_slots,
-    .basicsize = (int) sizeof(PyObject),
+static PyType_Spec callable_spec = {
+    .name = "pypy_issues.callable",
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_VECTORCALL,
+    .slots = callable_slots,
+    .basicsize = (int) sizeof(callable),
     .itemsize = 0
 };
 
-// ----------------------------------------------------
-// Part #3: Reproducer of method vector call issue
-// ----------------------------------------------------
-
-static PyObject* method_call(PyObject* self, PyObject* arg) {
-    PyObject *value = PyLong_FromLong(1234);
-    if (!value)
-        return NULL;
-
-    PyObject *name = PyUnicode_FromString("my_method");
-    if (!name) {
-        Py_DECREF(value);
-        return NULL;
-    }
-
-    PyObject *args[2] = { arg, value };
-    size_t nargsf = 2 | PY_VECTORCALL_ARGUMENTS_OFFSET;
-
-    PyObject *result = PyObject_VectorcallMethod(
-        name, args, nargsf, NULL);
-
-    Py_DECREF(value);
-    Py_DECREF(name);
-
-    return result;
-}
-
-static PyObject* method_call_kw(PyObject* self, PyObject* arg) {
-    PyObject *value = NULL,
-             *name = NULL,
-             *kwnames = NULL,
-             *kw_name = NULL,
-             *kw_value = NULL,
-             *result = NULL;
-
-    value = PyLong_FromLong(1234);
-    if (!value)
-        goto leave;
-
-    name = PyUnicode_FromString("my_method");
-    if (!name)
-        goto leave;
-
-    kwnames = PyTuple_New(1);
-    if (!kwnames)
-        goto leave;
-
-    kw_name = PyUnicode_InternFromString("foo");
-    if (!kw_name)
-        goto leave;
-    PyTuple_SET_ITEM(kwnames, 0, kw_name);
-
-    kw_value = PyUnicode_FromString("bar");
-    if (!kw_value)
-        goto leave;
-
-    PyObject *args[3] = { arg, value, kw_value };
-    size_t nargsf = 2 | PY_VECTORCALL_ARGUMENTS_OFFSET;
-
-    result = PyObject_VectorcallMethod(
-        name, args, nargsf, kwnames);
-
-leave:
-    Py_XDECREF(value);
-    Py_XDECREF(name);
-    Py_XDECREF(kwnames);
-    Py_XDECREF(kw_value);
-
-    return result;
-}
 
 // ----------------------------------------------------
 
@@ -201,8 +114,6 @@ static PyObject* get_name(PyObject* self, PyObject* arg) {
 // ----------------------------------------------------
 
 struct PyMethodDef pypy_issues_methods[] = {
-    { "method_call", (PyCFunction) method_call, METH_O, NULL },
-    { "method_call_kw", (PyCFunction) method_call_kw, METH_O, NULL },
     { "get_name", (PyCFunction) get_name, METH_O, NULL },
     { NULL, NULL, 0, NULL},
 };
@@ -232,9 +143,9 @@ PyInit_pypy_issues(void)
         return NULL;
     }
 
-    PyObject *func = PyType_FromSpec(&func_spec);
+    PyObject *func = PyType_FromSpec(&callable_spec);
 
-    if (!func || PyModule_AddObject(m, "func", func) < 0) {
+    if (!func || PyModule_AddObject(m, "callable", func) < 0) {
         Py_XDECREF(func);
         Py_DECREF(m);
         return NULL;
