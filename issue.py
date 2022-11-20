@@ -1,16 +1,17 @@
-from pypy_issues import wrapper, callable
+from pypy_issues import my_object, my_callable
 import gc
 
 def f():
-    w = wrapper()
+    o = my_object()
+    c = my_callable()
 
     # Comment try/except block to fix refleak
     try:
-        callable()(w)
+        c(o)
     except:
         pass # Ignore exception
 
-    del w
+    del o
 
     # GC 3 times in function scope for good measure!
     gc.collect()
